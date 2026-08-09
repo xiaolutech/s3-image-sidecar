@@ -1,6 +1,6 @@
 module github.com/xiaolutech/s3-image-sidecar
 
-go 1.25.6
+go 1.26.5
 
 require (
 	github.com/aws/aws-sdk-go-v2 v1.43.4
