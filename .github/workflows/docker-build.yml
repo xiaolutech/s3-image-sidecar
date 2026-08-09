@@ -26,14 +26,14 @@ jobs:
         include: ${{ fromJSON(github.event_name == 'pull_request' && '[{"platform":"linux/amd64","runner":"ubuntu-latest","cache-scope":"linux-amd64"}]' || '[{"platform":"linux/amd64","runner":"ubuntu-latest","cache-scope":"linux-amd64"},{"platform":"linux/arm64","runner":"ubuntu-24.04-arm","cache-scope":"linux-arm64"}]') }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
 
       - name: Log in to GitHub Container Registry
         if: github.event_name != 'pull_request'
-        uses: docker/login-action@v4
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -41,13 +41,13 @@ jobs:
 
       - name: Extract metadata
         id: meta
-        uses: docker/metadata-action@v6
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6
         with:
           images: ghcr.io/xiaolutech/s3-image-sidecar
 
       - name: Build
         id: build
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
         with:
           context: .
           platforms: ${{ matrix.platform }}
@@ -67,7 +67,7 @@ jobs:
 
       - name: Upload digest
         if: github.event_name != 'pull_request'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: digests-${{ matrix.cache-scope }}
           path: /tmp/digests/*
@@ -82,17 +82,17 @@ jobs:
       digest: ${{ steps.inspect.outputs.digest }}
     steps:
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v4
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
 
       - name: Download digests
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           path: /tmp/digests
           pattern: digests-*
@@ -100,7 +100,7 @@ jobs:
 
       - name: Extract metadata
         id: meta
-        uses: docker/metadata-action@v6
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6
         with:
           images: ghcr.io/xiaolutech/s3-image-sidecar
           tags: |
@@ -127,7 +127,7 @@ jobs:
 
       - name: Update my-services image ref
         if: github.ref == 'refs/heads/main'
-        uses: xiaolutech/dispatch-my-services-image-ref@v1
+        uses: xiaolutech/dispatch-my-services-image-ref@2f945e368c0982f991a2664841103f886d3a243f # v1
         with:
           token: ${{ secrets.MY_SERVICES_DISPATCH_TOKEN }}
           target: s3-image-sidecar
