@@ -58,6 +58,7 @@ x-amz-meta-config-signature: <hash>
 - Each resident scan round starts by listing the source bucket once, building a folder fingerprint (`key + etag + size` over all objects), and comparing it against the saved manifest.
 - When the fingerprint is unchanged, the whole folder is skipped and no object is touched.
 - When it changed, only the added or modified keys are processed across bounded scan rounds; the optimized copies of untouched keys are not re-read.
+- A failed object is requeued at the head of the pass and retried on the next scan round; after three failed attempts within one pass it is abandoned with a WARN so a single broken object cannot block the queue.
 - When the optimization configuration changed (`MIN_BYTES`, quality, `MAX_WIDTH`, AVIF settings, or profile), every object is re-scheduled so affected outputs are regenerated without bumping the profile.
 - Saves the current manifest to `.s3-image-sidecar/manifest/<profile>.json` in `OPTIMIZED_BUCKET` at the end of each pass so change detection survives restarts.
 - Supports JPEG and PNG source objects.
@@ -67,6 +68,7 @@ x-amz-meta-config-signature: <hash>
 - Encodes supported source images to AVIF when `AVIF_ENABLED=true`.
 - Writes optimized objects to `OPTIMIZED_BUCKET`.
 - Skips objects smaller than `MIN_BYTES`.
+- Filters out non-image objects before download: keys ending in `.jpg`, `.jpeg`, or `.png` are fetched directly, and any other key is checked with a `HeadObject` request first, so objects without an image extension are skipped without being downloaded.
 - Skips unsupported or insufficiently-compressed images without writing an optimized object.
 
 Because only changed keys are re-optimized, an optimized object that is deleted or corrupted without a matching source change will not be repaired by either the resident loop or `RUN_ONCE`. To force a full re-encode, change an optimization setting (which bumps the manifest's config signature and re-schedules every object) or delete the manifest at `.s3-image-sidecar/manifest/<profile>.json`.

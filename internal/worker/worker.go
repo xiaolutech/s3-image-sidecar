@@ -8,7 +8,9 @@ import (
 	"errors"
 	"fmt"
 	"hash"
+	"path"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/xiaolutech/s3-image-sidecar/internal/imageopt"
@@ -29,12 +31,26 @@ const (
 	getObjectTimeout = 120 * time.Second
 	putObjectTimeout = 120 * time.Second
 	manifestTimeout  = 45 * time.Second
+
+	maxObjectProcessFailures = 3
+	headObjectTimeout        = 30 * time.Second
 )
+
+// optimizableExtensions lists source key extensions that skip the HEAD check
+// and are fetched without an extra request. Everything else is HEAD-checked
+// so large non-image objects are rejected before GetObject loads them into
+// memory.
+var optimizableExtensions = map[string]struct{}{
+	".jpg":  {},
+	".jpeg": {},
+	".png":  {},
+}
 
 type Store interface {
 	GetObject(ctx context.Context, bucket, key string) ([]byte, *storage.ObjectInfo, error)
 	PutObject(ctx context.Context, bucket, key string, body []byte, opts storage.PutOptions) error
 	ListObjects(ctx context.Context, bucket, prefix string, visit func(storage.ObjectInfo) error) error
+	HeadObject(ctx context.Context, bucket, key string) (*storage.ObjectInfo, error)
 }
 
 type Config struct {
@@ -66,6 +82,7 @@ type Worker struct {
 	passManifest   *Manifest
 	manifestDirty  bool
 	pendingObjects []storage.ObjectInfo
+	objectFailures map[string]int
 
 	logger *slog.Logger
 }
@@ -177,8 +194,16 @@ func (w *Worker) RunScanRound(ctx context.Context) (ScanRoundResult, error) {
 		w.pendingObjects = w.pendingObjects[1:]
 		counted, err := w.processObject(ctx, info)
 		if err != nil {
-			w.pendingObjects = append([]storage.ObjectInfo{info}, w.pendingObjects...)
-			return result, processObjectError{err: err}
+			if w.recordObjectFailure(info, err) {
+				w.pendingObjects = append([]storage.ObjectInfo{info}, w.pendingObjects...)
+				return result, processObjectError{err: err}
+			}
+			// Abandon the object for the rest of this pass so one broken
+			// object cannot block the queue head.
+			result.Processed++
+			result.LastKey = info.Key
+			processed++
+			continue
 		}
 		if counted {
 			result.Processed++
@@ -205,7 +230,24 @@ func (w *Worker) resetPass() {
 	w.passStarted = false
 	w.passManifest = nil
 	w.pendingObjects = nil
+	w.objectFailures = nil
 	w.manifestDirty = false
+}
+
+// recordObjectFailure counts per-object failures within the current pass and
+// reports whether the object should be retried. Objects that keep failing
+// are abandoned with a WARN so a single broken object cannot block the queue
+// head forever.
+func (w *Worker) recordObjectFailure(info storage.ObjectInfo, err error) bool {
+	if w.objectFailures == nil {
+		w.objectFailures = make(map[string]int)
+	}
+	w.objectFailures[info.Key]++
+	if w.objectFailures[info.Key] < maxObjectProcessFailures {
+		return true
+	}
+	w.logger.Warn("skip failing object key=%s attempts=%d err=%v", info.Key, w.objectFailures[info.Key], err)
+	return false
 }
 
 func (w *Worker) startPass(ctx context.Context) error {
@@ -329,9 +371,38 @@ func (w *Worker) ProcessObject(ctx context.Context, source storage.ObjectInfo) e
 	return err
 }
 
+// shouldFetch reports whether the source object should be downloaded at all.
+// Keys with a known image extension are fetched without an extra request;
+// anything else is HEAD-checked so large non-image objects are skipped before
+// GetObject can load them into memory.
+func (w *Worker) shouldFetch(ctx context.Context, source storage.ObjectInfo) (bool, error) {
+	if _, ok := optimizableExtensions[strings.ToLower(path.Ext(source.Key))]; ok {
+		return true, nil
+	}
+	headCtx, cancel := context.WithTimeout(ctx, headObjectTimeout)
+	defer cancel()
+	info, err := w.store.HeadObject(headCtx, w.cfg.SourceBucket, source.Key)
+	if err != nil {
+		if isNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return imageopt.IsSupportedContentType(info.ContentType), nil
+}
+
 func (w *Worker) processObject(ctx context.Context, source storage.ObjectInfo) (bool, error) {
 	if source.Size < w.cfg.MinBytes {
 		w.logger.Debug("skip small object key=%s size=%d", source.Key, source.Size)
+		return true, nil
+	}
+
+	fetch, err := w.shouldFetch(ctx, source)
+	if err != nil {
+		return false, fmt.Errorf("head source object %s: %w", source.Key, err)
+	}
+	if !fetch {
+		w.logger.Debug("skip non-image object key=%s", source.Key)
 		return true, nil
 	}
 

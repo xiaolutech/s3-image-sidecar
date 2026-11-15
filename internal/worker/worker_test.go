@@ -362,6 +362,94 @@ func TestWorkerSkipsSmallSourceWithoutRead(t *testing.T) {
 	}
 }
 
+func TestWorkerSkipsNonImageKeyWithoutGet(t *testing.T) {
+	store := newFakeStore()
+	source := storage.ObjectInfo{Key: "notes/video.mp4", Size: 1024, ETag: "video-etag", ContentType: "video/mp4"}
+	store.objects[objKey("source", source.Key)] = fakeObject{info: source, body: []byte("video")}
+
+	w := New(store, testWorkerConfig(), testLogger())
+	if err := w.ProcessObject(context.Background(), source); err != nil {
+		t.Fatalf("ProcessObject failed: %v", err)
+	}
+
+	if store.headCalls != 1 {
+		t.Fatalf("expected one head for unknown extension, got %d", store.headCalls)
+	}
+	if store.getCalls != 0 {
+		t.Fatalf("expected no source get for non-image key, got %d", store.getCalls)
+	}
+	if len(store.putKeys) != 0 {
+		t.Fatalf("expected no writes for non-image key, got %#v", store.putKeys)
+	}
+}
+
+func TestWorkerHeadsUnknownExtensionAndSkipsNonImage(t *testing.T) {
+	store := newFakeStore()
+	source := storage.ObjectInfo{Key: "notes/screenshot", Size: 1024, ETag: "video-etag", ContentType: "video/mp4"}
+	store.objects[objKey("source", source.Key)] = fakeObject{info: source, body: []byte("video")}
+
+	w := New(store, testWorkerConfig(), testLogger())
+	if err := w.ProcessObject(context.Background(), source); err != nil {
+		t.Fatalf("ProcessObject failed: %v", err)
+	}
+
+	if store.headCalls != 1 {
+		t.Fatalf("expected one head, got %d", store.headCalls)
+	}
+	if store.getCalls != 0 {
+		t.Fatalf("expected no source get after unsupported head, got %d", store.getCalls)
+	}
+	if len(store.putKeys) != 0 {
+		t.Fatalf("expected no writes after unsupported head, got %#v", store.putKeys)
+	}
+}
+
+func TestWorkerProcessesUnknownExtensionImageViaHead(t *testing.T) {
+	store := newFakeStore()
+	body := largeJPEG(t)
+	source := storage.ObjectInfo{Key: "notes/photo", Size: int64(len(body)), ETag: "photo-etag", ContentType: "image/jpeg"}
+	store.objects[objKey("source", source.Key)] = fakeObject{info: source, body: body}
+
+	w := New(store, testWorkerConfig(), testLogger())
+	if err := w.ProcessObject(context.Background(), source); err != nil {
+		t.Fatalf("ProcessObject failed: %v", err)
+	}
+
+	if store.headCalls != 1 {
+		t.Fatalf("expected one head, got %d", store.headCalls)
+	}
+	if store.sourceGetCalls != 1 {
+		t.Fatalf("expected one source get, got %d", store.sourceGetCalls)
+	}
+	written := store.objects[objKey("optimized", "notes/photo.webp")]
+	if len(written.body) == 0 {
+		t.Fatal("expected optimized object to be written")
+	}
+}
+
+func TestWorkerSkipsUnsupportedContentTypeAfterDownload(t *testing.T) {
+	store := newFakeStore()
+	// Known image extensions skip the HEAD check, so a bogus stored content
+	// type is still rejected by the optimizer after the download.
+	source := storage.ObjectInfo{Key: "notes/photo.jpg", Size: 1024, ETag: "photo-etag", ContentType: "image/gif"}
+	store.objects[objKey("source", source.Key)] = fakeObject{info: source, body: []byte("gif")}
+
+	w := New(store, testWorkerConfig(), testLogger())
+	if err := w.ProcessObject(context.Background(), source); err != nil {
+		t.Fatalf("ProcessObject failed: %v", err)
+	}
+
+	if store.headCalls != 0 {
+		t.Fatalf("expected no head for whitelisted extension, got %d", store.headCalls)
+	}
+	if store.getCalls != 1 {
+		t.Fatalf("expected one source get, got %d", store.getCalls)
+	}
+	if len(store.putKeys) != 0 {
+		t.Fatalf("expected no writes for unsupported content type, got %#v", store.putKeys)
+	}
+}
+
 func TestWorkerSkipsUnsupportedSourceWithoutWritingOptimized(t *testing.T) {
 	store := newFakeStore()
 	source := storage.ObjectInfo{Key: "notes/anim.gif", Size: 1024, ETag: "gif-etag", ContentType: "image/gif"}
@@ -372,8 +460,11 @@ func TestWorkerSkipsUnsupportedSourceWithoutWritingOptimized(t *testing.T) {
 		t.Fatalf("ProcessObject failed: %v", err)
 	}
 
-	if store.getCalls != 1 {
-		t.Fatalf("expected one source get, got %d", store.getCalls)
+	if store.headCalls != 1 {
+		t.Fatalf("expected one head for unknown extension, got %d", store.headCalls)
+	}
+	if store.getCalls != 0 {
+		t.Fatalf("expected no source get for unsupported source, got %d", store.getCalls)
 	}
 	if len(store.putKeys) != 0 {
 		t.Fatalf("expected no writes for unsupported source, got %#v", store.putKeys)
@@ -707,6 +798,50 @@ func TestWorkerRunScanRoundReprocessesAllObjectsOnConfigChange(t *testing.T) {
 	}
 }
 
+func TestWorkerRunScanRoundAbandonsObjectAfterRepeatedFailures(t *testing.T) {
+	store := newFakeStore()
+	body := largeJPEG(t)
+	store.objects[objKey("source", "bad.jpg")] = fakeObject{
+		info: storage.ObjectInfo{Key: "bad.jpg", Size: int64(len(body)), ETag: "bad-etag", ContentType: "image/jpeg"},
+		body: body,
+	}
+	store.getErrors[objKey("source", "bad.jpg")] = errors.New("source get failed")
+	store.objects[objKey("source", "good.jpg")] = fakeObject{
+		info: storage.ObjectInfo{Key: "good.jpg", Size: int64(len(body)), ETag: "good-etag", ContentType: "image/jpeg"},
+		body: body,
+	}
+
+	w := New(store, testWorkerConfig(), testLogger())
+	// bad.jpg sorts before good.jpg and fails at the head of the queue.
+	// Attempts 1 and 2 requeue it and fail the round; attempt 3 abandons it
+	// and lets the round continue with good.jpg.
+	for attempt := 1; attempt <= 2; attempt++ {
+		if _, err := w.RunScanRound(context.Background()); err == nil {
+			t.Fatalf("expected round %d to fail while bad.jpg is retryable", attempt)
+		}
+	}
+
+	result, err := w.RunScanRound(context.Background())
+	if err != nil {
+		t.Fatalf("expected final round to abandon bad.jpg, got %v", err)
+	}
+	if result.HasMore {
+		t.Fatal("expected pass to complete after abandoning bad.jpg")
+	}
+	if result.Processed != 2 {
+		t.Fatalf("expected both objects counted as processed, got %d", result.Processed)
+	}
+	if _, ok := store.objects[objKey("optimized", optimizedVariantKey("good.jpg", webpVariantFormat))]; !ok {
+		t.Fatal("expected good.jpg to be optimized after bad.jpg was abandoned")
+	}
+	if _, ok := store.objects[objKey("optimized", optimizedVariantKey("bad.jpg", webpVariantFormat))]; ok {
+		t.Fatal("did not expect bad.jpg to be optimized")
+	}
+	if store.sourceGetCalls != 4 {
+		t.Fatalf("expected 3 attempts on bad.jpg plus 1 for good.jpg, got %d", store.sourceGetCalls)
+	}
+}
+
 type fakeObject struct {
 	info storage.ObjectInfo
 	body []byte
@@ -715,6 +850,7 @@ type fakeObject struct {
 type fakeStore struct {
 	objects             map[string]fakeObject
 	getCalls            int
+	headCalls           int
 	sourceGetCalls      int
 	listCalls           int
 	putKeys             []string
@@ -745,6 +881,19 @@ func (s *fakeStore) GetObject(ctx context.Context, bucket, key string) ([]byte, 
 	}
 	info := obj.info
 	return append([]byte(nil), obj.body...), &info, nil
+}
+
+func (s *fakeStore) HeadObject(ctx context.Context, bucket, key string) (*storage.ObjectInfo, error) {
+	s.headCalls++
+	if err, ok := s.getErrors[objKey(bucket, key)]; ok {
+		return nil, err
+	}
+	obj, ok := s.objects[objKey(bucket, key)]
+	if !ok {
+		return nil, errNotFound{}
+	}
+	info := obj.info
+	return &info, nil
 }
 
 func (s *fakeStore) PutObject(ctx context.Context, bucket, key string, body []byte, opts storage.PutOptions) error {
