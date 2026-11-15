@@ -150,16 +150,17 @@ func TestS3ClientListStopsOnVisitError(t *testing.T) {
 func startMinIO(t *testing.T, ctx context.Context) string {
 	t.Helper()
 	// minio/minio on Docker Hub and quay.io now require an authenticated
-	// pull, which breaks anonymous CI runners. The Bitnami legacy catalog is
-	// the last anonymously pullable MinIO image; its entrypoint starts the
-	// server on port 9000 without an explicit command.
+	// pull, which breaks anonymous CI runners. Silo (pgsty/silo) is a
+	// maintained MinIO fork that keeps the S3 API, MINIO_* variables, the
+	// server command and /minio/* routes compatible with the original image.
 	req := testcontainers.ContainerRequest{
-		Image:        "bitnamilegacy/minio:2025.7.23-debian-12-r5",
+		Image:        "pgsty/silo:RELEASE.2026-11-12T00-00-00Z",
 		ExposedPorts: []string{"9000/tcp"},
 		Env: map[string]string{
 			"MINIO_ROOT_USER":     "minioadmin",
 			"MINIO_ROOT_PASSWORD": "minioadmin",
 		},
+		Cmd:        []string{"server", "/data"},
 		WaitingFor: wait.ForHTTP("/minio/health/live").WithPort("9000/tcp").WithStartupTimeout(30 * time.Second),
 	}
 
