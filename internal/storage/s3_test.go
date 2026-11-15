@@ -149,14 +149,17 @@ func TestS3ClientListStopsOnVisitError(t *testing.T) {
 
 func startMinIO(t *testing.T, ctx context.Context) string {
 	t.Helper()
+	// minio/minio on Docker Hub and quay.io now require an authenticated
+	// pull, which breaks anonymous CI runners. The Bitnami legacy catalog is
+	// the last anonymously pullable MinIO image; its entrypoint starts the
+	// server on port 9000 without an explicit command.
 	req := testcontainers.ContainerRequest{
-		Image:        "minio/minio:RELEASE.2024-01-16T16-07-38Z",
+		Image:        "bitnamilegacy/minio:2025.7.23-debian-12-r5",
 		ExposedPorts: []string{"9000/tcp"},
 		Env: map[string]string{
-			"MINIO_ACCESS_KEY": "minioadmin",
-			"MINIO_SECRET_KEY": "minioadmin",
+			"MINIO_ROOT_USER":     "minioadmin",
+			"MINIO_ROOT_PASSWORD": "minioadmin",
 		},
-		Cmd:        []string{"server", "/data"},
 		WaitingFor: wait.ForHTTP("/minio/health/live").WithPort("9000/tcp").WithStartupTimeout(30 * time.Second),
 	}
 
