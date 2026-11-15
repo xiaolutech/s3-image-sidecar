@@ -52,6 +52,29 @@ func TestWorkerProcessesMissingOptimizedObject(t *testing.T) {
 	}
 }
 
+func TestWorkerSkipsOversizedSourceWithoutRead(t *testing.T) {
+	store := newFakeStore()
+	cfg := testWorkerConfig()
+	cfg.MaxSourceBytes = 1024
+	source := storage.ObjectInfo{
+		Key:         "notes/large.jpg",
+		Size:        cfg.MaxSourceBytes + 1,
+		ETag:        "source-etag",
+		ContentType: "image/jpeg",
+	}
+
+	w := New(store, cfg, testLogger())
+	if err := w.ProcessObject(context.Background(), source); err != nil {
+		t.Fatalf("ProcessObject failed: %v", err)
+	}
+	if store.getCalls != 0 {
+		t.Fatalf("expected oversized source to be skipped before GetObject, got %d calls", store.getCalls)
+	}
+	if store.headCalls != 0 {
+		t.Fatalf("expected oversized source to be skipped before HeadObject, got %d calls", store.headCalls)
+	}
+}
+
 func TestOptimizedObjectContractVector(t *testing.T) {
 	const sourceKey = "notes/photo.png"
 	const expectedAVIFKey = "notes/photo.png.avif"
@@ -968,6 +991,7 @@ func testWorkerConfig() Config {
 		JPEGQuality:         82,
 		WebPQuality:         82,
 		MinBytes:            512,
+		MinSavings:          0.05,
 		ScanBatchSize:       200,
 	}
 }

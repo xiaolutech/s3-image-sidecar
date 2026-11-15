@@ -40,6 +40,9 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.MinBytes != 512*1024 {
 		t.Fatalf("expected min bytes 524288, got %d", cfg.MinBytes)
 	}
+	if cfg.MaxSourceBytes != 0 || cfg.MaxSourcePixels != 50_000_000 || cfg.MinSavings != 0.05 {
+		t.Fatalf("unexpected source limits or minimum savings: %#v", cfg)
+	}
 	if cfg.AVIFEnabled {
 		t.Fatal("expected AVIFEnabled false by default")
 	}
@@ -99,6 +102,9 @@ func TestLoadFromEnv(t *testing.T) {
 	t.Setenv("JPEG_QUALITY", "76")
 	t.Setenv("WEBP_QUALITY", "80")
 	t.Setenv("MIN_BYTES", "262144")
+	t.Setenv("MAX_SOURCE_BYTES", "20971520")
+	t.Setenv("MAX_SOURCE_PIXELS", "40000000")
+	t.Setenv("MIN_SAVINGS", "0.08")
 	t.Setenv("AVIF_ENABLED", "true")
 	t.Setenv("AVIF_TARGET_BYTES", "786432")
 	t.Setenv("AVIF_QUALITY_MIN", "30")
@@ -136,6 +142,9 @@ func TestLoadFromEnv(t *testing.T) {
 	}
 	if cfg.MaxWidth != 2560 || cfg.JPEGQuality != 76 || cfg.WebPQuality != 80 || cfg.MinBytes != 262144 {
 		t.Fatalf("unexpected optimization config: %#v", cfg)
+	}
+	if cfg.MaxSourceBytes != 20971520 || cfg.MaxSourcePixels != 40000000 || cfg.MinSavings != 0.08 {
+		t.Fatalf("unexpected source limits or minimum savings: %#v", cfg)
 	}
 	if !cfg.AVIFEnabled {
 		t.Fatal("expected AVIF enabled")
@@ -243,6 +252,26 @@ func TestValidateRequiresCoreFields(t *testing.T) {
 			name:      "negative min bytes",
 			mutate:    func(cfg *Config) { cfg.MinBytes = -1 },
 			wantError: "MIN_BYTES",
+		},
+		{
+			name:      "negative max source bytes",
+			mutate:    func(cfg *Config) { cfg.MaxSourceBytes = -1 },
+			wantError: "MAX_SOURCE_BYTES",
+		},
+		{
+			name:      "negative max source pixels",
+			mutate:    func(cfg *Config) { cfg.MaxSourcePixels = -1 },
+			wantError: "MAX_SOURCE_PIXELS",
+		},
+		{
+			name:      "negative min savings",
+			mutate:    func(cfg *Config) { cfg.MinSavings = -0.01 },
+			wantError: "MIN_SAVINGS",
+		},
+		{
+			name:      "min savings at upper bound",
+			mutate:    func(cfg *Config) { cfg.MinSavings = 1 },
+			wantError: "MIN_SAVINGS",
 		},
 		{
 			name:      "negative AVIF target bytes",
@@ -353,6 +382,9 @@ func TestLoadRejectsInvalidEnv(t *testing.T) {
 		{name: "invalid jpeg quality", key: "JPEG_QUALITY", val: "high"},
 		{name: "invalid webp quality", key: "WEBP_QUALITY", val: "high"},
 		{name: "invalid min bytes", key: "MIN_BYTES", val: "many"},
+		{name: "invalid max source bytes", key: "MAX_SOURCE_BYTES", val: "many"},
+		{name: "invalid max source pixels", key: "MAX_SOURCE_PIXELS", val: "many"},
+		{name: "invalid min savings", key: "MIN_SAVINGS", val: "much"},
 		{name: "invalid AVIF enabled", key: "AVIF_ENABLED", val: "sometimes"},
 		{name: "invalid AVIF target bytes", key: "AVIF_TARGET_BYTES", val: "many"},
 		{name: "invalid AVIF min quality", key: "AVIF_QUALITY_MIN", val: "low"},
@@ -421,6 +453,9 @@ func clearEnv(t *testing.T) {
 		"JPEG_QUALITY",
 		"WEBP_QUALITY",
 		"MIN_BYTES",
+		"MAX_SOURCE_BYTES",
+		"MAX_SOURCE_PIXELS",
+		"MIN_SAVINGS",
 		"AVIF_ENABLED",
 		"AVIF_TARGET_BYTES",
 		"AVIF_QUALITY_MIN",

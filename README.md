@@ -68,10 +68,15 @@ x-amz-meta-config-signature: <hash>
 - Encodes supported source images to AVIF when `AVIF_ENABLED=true`.
 - Writes optimized objects to `OPTIMIZED_BUCKET`.
 - Skips objects smaller than `MIN_BYTES`.
+- Skips source objects larger than `MAX_SOURCE_BYTES` before HEAD checks or download when the limit is greater than `0`.
+- Reads image dimensions before full decoding and skips images larger than `MAX_SOURCE_PIXELS`; the default is 50 megapixels, and `0` disables the limit.
+- Skips optimized outputs that do not save at least `MIN_SAVINGS` of the source size.
 - Filters out non-image objects before download: keys ending in `.jpg`, `.jpeg`, or `.png` are fetched directly, and any other key is checked with a `HeadObject` request first, so objects without an image extension are skipped without being downloaded.
 - Skips unsupported or insufficiently-compressed images without writing an optimized object.
 
 Because only changed keys are re-optimized, an optimized object that is deleted or corrupted without a matching source change will not be repaired by either the resident loop or `RUN_ONCE`. To force a full re-encode, change an optimization setting (which bumps the manifest's config signature and re-schedules every object) or delete the manifest at `.s3-image-sidecar/manifest/<profile>.json`.
+
+Note: `MAX_SOURCE_BYTES`, `MAX_SOURCE_PIXELS` and `MIN_SAVINGS` are filtering thresholds and are intentionally **not** part of the config signature, so changing them does not re-schedule existing objects. To re-process objects that were previously skipped by these thresholds, bump `OPTIMIZATION_PROFILE` or delete the manifest.
 
 ## Configuration
 
@@ -93,6 +98,9 @@ Because only changed keys are re-optimized, an optimized object that is deleted 
 - `AVIF_QUALITY_MAX` - Highest AVIF quality considered during search. Default: `75`.
 - `AVIF_SPEED` - AVIF encoder speed, 0 through 10; higher is faster with lower compression efficiency. Default: `6`.
 - `MIN_BYTES` - Minimum source object size before optimization. Default: `524288`.
+- `MAX_SOURCE_BYTES` - Maximum source object size allowed before fetching. Set to `0` to disable. Default: `0`.
+- `MAX_SOURCE_PIXELS` - Maximum source image pixel count checked before full decoding. Set to `0` to disable. Default: `50000000`.
+- `MIN_SAVINGS` - Minimum fraction of source bytes that an optimized output must save. Must be at least `0` and less than `1`. Default: `0.05`.
 - `SCAN_ENABLED` - Enable resident bounded scan rounds. Default: `false`.
 - `SCAN_INTERVAL` - Delay between resident scan rounds while a bucket pass still has more changed objects; sets the pace between batches when `SCAN_ENABLED=true`. Default: `24h`.
 - `SCAN_FULL_PASS_INTERVAL` - Delay after a resident scan round reaches the end of the bucket before starting over from the beginning. Default: `24h`.

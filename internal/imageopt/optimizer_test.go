@@ -113,6 +113,43 @@ func TestOptimizeWithZeroMaxWidthKeepsOriginalDimensions(t *testing.T) {
 	}
 }
 
+func TestOptimizeSkipsOversizedDimensions(t *testing.T) {
+	input := encodeJPEG(t, gradientImage(100, 100), 90)
+
+	result, err := Optimize(input, "image/jpeg", Options{
+		MaxWidth:        0,
+		JPEGQuality:     82,
+		MinSavings:      0,
+		MaxSourcePixels: 1,
+	})
+	if err != nil {
+		t.Fatalf("Optimize failed: %v", err)
+	}
+	if !result.Skipped || result.Reason != "oversized_dimensions" {
+		t.Fatalf("expected oversized_dimensions skip, got %#v", result)
+	}
+	if result.Width != 100 || result.Height != 100 {
+		t.Fatalf("expected source dimensions 100x100, got %dx%d", result.Width, result.Height)
+	}
+}
+
+func TestOptimizeDimensionsGuardDisabled(t *testing.T) {
+	input := encodeJPEG(t, gradientImage(100, 100), 95)
+
+	result, err := Optimize(input, "image/jpeg", Options{
+		MaxWidth:        0,
+		JPEGQuality:     82,
+		MinSavings:      0,
+		MaxSourcePixels: 0,
+	})
+	if err != nil {
+		t.Fatalf("Optimize failed: %v", err)
+	}
+	if result.Skipped {
+		t.Fatalf("expected optimization with disabled dimensions guard, skipped with %s", result.Reason)
+	}
+}
+
 func TestOptimizeSkipsUnsupportedContentType(t *testing.T) {
 	var buf bytes.Buffer
 	if err := gif.Encode(&buf, gradientImage(100, 100), nil); err != nil {
@@ -147,8 +184,8 @@ func TestOptimizeSkipsUndecodableSupportedContent(t *testing.T) {
 	if !result.Skipped {
 		t.Fatal("expected undecodable image to be skipped")
 	}
-	if result.Reason != "decode_image_failed" {
-		t.Fatalf("expected decode_image_failed, got %q", result.Reason)
+	if result.Reason != "decode_config_failed" {
+		t.Fatalf("expected decode_config_failed, got %q", result.Reason)
 	}
 }
 

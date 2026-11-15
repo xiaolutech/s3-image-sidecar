@@ -66,6 +66,9 @@ type Config struct {
 	AVIFQualityMax        int
 	AVIFSpeed             int
 	MinBytes              int64
+	MaxSourceBytes        int64
+	MaxSourcePixels       int64
+	MinSavings            float64
 	ScanBatchSize         int
 	ScanRetryAttempts     int
 	ScanRetryInitialDelay time.Duration
@@ -113,6 +116,10 @@ func (c Config) Signature() string {
 	fmt.Fprintf(h, "jpeg_quality=%d\n", c.JPEGQuality)
 	fmt.Fprintf(h, "webp_quality=%d\n", c.WebPQuality)
 	fmt.Fprintf(h, "min_bytes=%d\n", c.MinBytes)
+	// MAX_SOURCE_BYTES / MAX_SOURCE_PIXELS / MIN_SAVINGS 是「过滤/门槛」参数，
+	// 不改变已写出优化产物的字节。故意不把它们纳入 Signature：否则仅仅新增这几个
+	// 字段就会改变 config signature，让部署启动时把整个桶重新排队（数天满 CPU 重编码）。
+	// 需要重新处理被这些阈值跳过的对象时，bump OPTIMIZATION_PROFILE 或删 manifest。
 	fmt.Fprintf(h, "avif_enabled=%t\n", c.AVIFEnabled)
 	fmt.Fprintf(h, "avif_target_bytes=%d\n", c.AVIFTargetBytes)
 	fmt.Fprintf(h, "avif_quality_min=%d\n", c.AVIFQualityMin)
@@ -396,13 +403,17 @@ func (w *Worker) processObject(ctx context.Context, source storage.ObjectInfo) (
 		w.logger.Debug("skip small object key=%s size=%d", source.Key, source.Size)
 		return true, nil
 	}
+	if w.cfg.MaxSourceBytes > 0 && source.Size > w.cfg.MaxSourceBytes {
+		w.logger.Info("skip oversized source object key=%s size=%d max_source_bytes=%d", source.Key, source.Size, w.cfg.MaxSourceBytes)
+		return true, nil
+	}
 
 	fetch, err := w.shouldFetch(ctx, source)
 	if err != nil {
 		return false, fmt.Errorf("head source object %s: %w", source.Key, err)
 	}
 	if !fetch {
-		w.logger.Debug("skip non-image object key=%s", source.Key)
+		w.logger.Info("skip non-image object key=%s skipped_reason=unsupported_content_type", source.Key)
 		return true, nil
 	}
 
@@ -420,7 +431,8 @@ func (w *Worker) processObject(ctx context.Context, source storage.ObjectInfo) (
 		MaxWidth:        w.cfg.MaxWidth,
 		JPEGQuality:     w.cfg.JPEGQuality,
 		WebPQuality:     w.cfg.WebPQuality,
-		MinSavings:      0.05,
+		MinSavings:      w.cfg.MinSavings,
+		MaxSourcePixels: w.cfg.MaxSourcePixels,
 		AVIFEnabled:     w.cfg.AVIFEnabled,
 		AVIFTargetBytes: w.cfg.AVIFTargetBytes,
 		AVIFQualityMin:  w.cfg.AVIFQualityMin,
@@ -431,7 +443,7 @@ func (w *Worker) processObject(ctx context.Context, source storage.ObjectInfo) (
 		return false, fmt.Errorf("optimize %s: %w", source.Key, err)
 	}
 	if result.Skipped {
-		w.logger.Debug("skip object key=%s reason=%s", source.Key, result.Reason)
+		w.logger.Info("skip object key=%s skipped_reason=%s", source.Key, result.Reason)
 		return true, nil
 	}
 

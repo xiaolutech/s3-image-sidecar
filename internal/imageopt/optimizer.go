@@ -27,6 +27,7 @@ type Options struct {
 	JPEGQuality     int
 	WebPQuality     int
 	MinSavings      float64
+	MaxSourcePixels int64
 	AVIFEnabled     bool
 	AVIFTargetBytes int64
 	AVIFQualityMin  int
@@ -68,6 +69,20 @@ func Optimize(body []byte, contentType string, opts Options) (Result, error) {
 		}
 	} else if opts.webpQuality() < 1 || opts.webpQuality() > 100 {
 		return Result{}, fmt.Errorf("webp quality must be between 1 and 100")
+	}
+
+	if opts.MaxSourcePixels < 0 {
+		return Result{}, fmt.Errorf("max source pixels cannot be negative")
+	}
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(body))
+	if err != nil {
+		return skipped("decode_config_failed"), nil
+	}
+	if opts.MaxSourcePixels > 0 && cfg.Width > 0 && cfg.Height > 0 && int64(cfg.Width) > opts.MaxSourcePixels/int64(cfg.Height) {
+		result := skipped("oversized_dimensions")
+		result.Width = cfg.Width
+		result.Height = cfg.Height
+		return result, nil
 	}
 
 	img, _, err := image.Decode(bytes.NewReader(body))

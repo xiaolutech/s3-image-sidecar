@@ -24,6 +24,9 @@ type Config struct {
 	JPEGQuality         int
 	WebPQuality         int
 	MinBytes            int64
+	MaxSourceBytes      int64
+	MaxSourcePixels     int64
+	MinSavings          float64
 	AVIFEnabled         bool
 	AVIFTargetBytes     int64
 	AVIFQualityMin      int
@@ -53,6 +56,8 @@ func DefaultConfig() *Config {
 		JPEGQuality:           82,
 		WebPQuality:           82,
 		MinBytes:              512 * 1024,
+		MaxSourcePixels:       50_000_000,
+		MinSavings:            0.05,
 		AVIFEnabled:           false,
 		AVIFTargetBytes:       1024 * 1024,
 		AVIFQualityMin:        35,
@@ -94,6 +99,15 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	if cfg.MinBytes, err = getenvInt64("MIN_BYTES", cfg.MinBytes); err != nil {
+		return nil, err
+	}
+	if cfg.MaxSourceBytes, err = getenvInt64("MAX_SOURCE_BYTES", cfg.MaxSourceBytes); err != nil {
+		return nil, err
+	}
+	if cfg.MaxSourcePixels, err = getenvInt64("MAX_SOURCE_PIXELS", cfg.MaxSourcePixels); err != nil {
+		return nil, err
+	}
+	if cfg.MinSavings, err = getenvFloat64("MIN_SAVINGS", cfg.MinSavings); err != nil {
 		return nil, err
 	}
 	if cfg.AVIFEnabled, err = getenvBool("AVIF_ENABLED", cfg.AVIFEnabled); err != nil {
@@ -175,6 +189,15 @@ func (c *Config) Validate() error {
 	}
 	if c.MinBytes < 0 {
 		return fmt.Errorf("MIN_BYTES cannot be negative")
+	}
+	if c.MaxSourceBytes < 0 {
+		return fmt.Errorf("MAX_SOURCE_BYTES cannot be negative")
+	}
+	if c.MaxSourcePixels < 0 {
+		return fmt.Errorf("MAX_SOURCE_PIXELS cannot be negative")
+	}
+	if c.MinSavings < 0 || c.MinSavings >= 1 {
+		return fmt.Errorf("MIN_SAVINGS must be >= 0 and < 1")
 	}
 	if c.AVIFTargetBytes < 0 {
 		return fmt.Errorf("AVIF_TARGET_BYTES cannot be negative")
@@ -259,6 +282,18 @@ func getenvInt64(key string, fallback int64) (int64, error) {
 		return fallback, nil
 	}
 	parsed, err := strconv.ParseInt(value, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid %s: %w", key, err)
+	}
+	return parsed, nil
+}
+
+func getenvFloat64(key string, fallback float64) (float64, error) {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback, nil
+	}
+	parsed, err := strconv.ParseFloat(value, 64)
 	if err != nil {
 		return 0, fmt.Errorf("invalid %s: %w", key, err)
 	}
