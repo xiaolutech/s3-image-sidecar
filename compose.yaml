@@ -3,7 +3,7 @@ services:
     # minio/minio and minio/mc require an authenticated pull since MinIO
     # gated their registries. Silo (pgsty/silo) is a maintained MinIO fork
     # with a compatible S3 API, MINIO_* variables and server command.
-    image: pgsty/silo:RELEASE.2026-11-12T00-00-00Z
+    image: pgsty/silo:RELEASE.2026-11-12T00-00-00Z@sha256:c20d112390b9a9ce8c11b8af95ad35bcaa62f4759663c09c936cd8d2b511f329
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: minioadmin
@@ -18,7 +18,7 @@ services:
       retries: 20
 
   minio-setup:
-    image: pgsty/silo:RELEASE.2026-11-12T00-00-00Z
+    image: pgsty/silo:RELEASE.2026-11-12T00-00-00Z@sha256:c20d112390b9a9ce8c11b8af95ad35bcaa62f4759663c09c936cd8d2b511f329
     depends_on:
       minio:
         condition: service_healthy
